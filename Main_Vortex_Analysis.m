@@ -42,8 +42,9 @@ config.returnResponse = false;
 config.maxFramesForDemo = 96;
 
 %% Load or synthesize input data
-inputData = loadInputData(config);
-etaStack = inputData.etaStack;
+load("C:\Users\sverrsr\Documents\SYNC\flow-statistics\surfElev_RE2500_WEINF.mat");
+
+etaStack = permute(surfElev, [2 3 1]);
 
 fprintf('Loaded etaStack with size [%d x %d x %d].\n', size(etaStack, 1), size(etaStack, 2), size(etaStack, 3));
 fprintf('Using L_nu = %.4f and lambda2 threshold = %.6e.\n', config.Lnu, config.lambda2Threshold);
@@ -73,76 +74,3 @@ fprintf('Persistent tracks: %d / %d\n', summary.numPersistentTracks, summary.num
 fprintf('Scar NCC (area vs beta^2): %.4f\n', summary.scarNCC);
 fprintf('Dimple NCC (area vs beta^2): %.4f\n', summary.dimpleNCC);
 
-%% Local helpers
-function inputData = loadInputData(config)
-%LOADINPUTDATA Load external periodic data or synthesize a demo dataset.
-% The preferred external input is a MAT file containing etaStack and any of
-% the optional fields beta2Stack, beta2ByDepth, zLevels, lambda2Stack, or
-% velocityGradientStack.
-
-    candidateFiles = {'vortex_input.mat', 'input/vortex_input.mat', 'data/vortex_input.mat'};
-    dataFile = '';
-    for idx = 1:numel(candidateFiles)
-        if exist(candidateFiles{idx}, 'file') == 2
-            dataFile = candidateFiles{idx};
-            break;
-        end
-    end
-
-    if ~isempty(dataFile)
-        inputData = load(dataFile);
-        if ~isfield(inputData, 'etaStack')
-            error('Input MAT file must contain etaStack.');
-        end
-        return;
-    end
-
-    warning(['No vortex_input.mat file was found. Generating a compact synthetic ' ...
-             'periodic dataset so the full MATLAB pipeline remains runnable.']);
-
-    Nt = config.maxFramesForDemo;
-    Ny = 256;
-    Nx = 256;
-    yCoordinates = linspace(0, 2 * pi, Ny + 1);
-    xCoordinates = linspace(0, 2 * pi, Nx + 1);
-    yCoordinates(end) = [];
-    xCoordinates(end) = [];
-    [yGrid, xGrid] = ndgrid(yCoordinates, xCoordinates);
-
-    etaStack = zeros(Ny, Nx, Nt, 'single');
-    beta2Stack = zeros(Ny, Nx, Nt, 'single');
-    zLevels = linspace(0, 2 * config.lambdaT, 16);
-    beta2ByDepth = zeros(1, 1, numel(zLevels), Nt, 'single');
-
-    for t = 1:Nt
-        phase = 2 * pi * (t - 1) / Nt;
-        dimple1 = exp(-((wrapPeriodic(xGrid - (0.8 + 0.6 * cos(phase)))).^2 + ...
-                        (wrapPeriodic(yGrid - (1.5 + 0.4 * sin(phase)))).^2) / (2 * 0.11^2));
-        dimple2 = exp(-((wrapPeriodic(xGrid - (4.6 - 0.3 * sin(1.7 * phase)))).^2 + ...
-                        (wrapPeriodic(yGrid - (4.0 + 0.2 * cos(phase)))).^2) / (2 * 0.14^2));
-        scar = exp(-(wrapPeriodic((xGrid - 3.2) * cos(0.35) + (yGrid - 2.8) * sin(0.35))).^2 / (2 * 0.52^2) ...
-                   -(wrapPeriodic(-(xGrid - 3.2) * sin(0.35) + (yGrid - 2.8) * cos(0.35))).^2 / (2 * 0.09^2));
-        background = 0.03 * sin(4 * xGrid + phase) .* cos(3 * yGrid - 0.3 * phase);
-
-        etaFrame = background - 0.15 * dimple1 - 0.12 * dimple2 - 0.09 * scar;
-        etaStack(:, :, t) = single(etaFrame);
-
-        beta2Frame = 0.7 * dimple1 + 0.4 * dimple2 + 0.8 * scar + 0.2 * abs(background);
-        beta2Stack(:, :, t) = single(beta2Frame .^ 2);
-
-        depthEnvelope = exp(-0.5 * ((zLevels - config.Lnu) / (0.35 * config.lambdaT)).^2);
-        beta2ByDepth(1, 1, :, t) = single((0.2 + 0.8 * depthEnvelope) * mean(beta2Frame(:) .^ 2));
-    end
-
-    inputData = struct();
-    inputData.etaStack = etaStack;
-    inputData.beta2Stack = beta2Stack;
-    inputData.beta2ByDepth = beta2ByDepth;
-    inputData.zLevels = zLevels;
-end
-
-function wrapped = wrapPeriodic(values)
-%WRAPPERIODIC Wrap values to the [-pi, pi) interval for periodic offsets.
-
-    wrapped = mod(values + pi, 2 * pi) - pi;
-end
