@@ -52,11 +52,30 @@ tracks = initializeTracks(); % Create an empty array of tracks.
 
 nextId = 1; % ID of the next track
 
-fps = 3; % your desired frame rate
+minValidFrames = 15;
+
+% SBS
+frameMasks = {};          % store mask for each frame
+frameImages = {};         % optional: store original frames
+frameTrackData = {};      % track boxes shown per frame
+trackLog = struct( ...
+    'id', {}, ...
+    'frames', {}, ...
+    'bboxes', {}, ...
+    'visible', {});
+
+fps = 10; % your desired frame rate
 % Detect moving objects, and track them across video frames.
 while hasFrame(obj.reader)
     frame = readFrame(obj.reader);
     [centroids, bboxes, mask] = detectObjects(frame);
+
+    % SBS
+    frameIdx = numel(frameMasks) + 1;
+    frameMasks{frameIdx} = mask;
+    frameImages{frameIdx} = frame;
+
+
     predictNewLocationsOfTracks();
     [assignments, unassignedTracks, unassignedDetections] = ...
         detectionToTrackAssignment();
@@ -66,10 +85,14 @@ while hasFrame(obj.reader)
     deleteLostTracks();
     createNewTracks();
     
-    pause(1/fps);
+    % SBS
+    logCurrentTracks(frameIdx);
+
+
     displayTrackingResults();
 end
 
+exportValidMaskedVideo();
 
 %% Create System Objects
 % Create System objects used for reading the video frames, detecting
@@ -301,6 +324,7 @@ end
         
         invisibleForTooLong = 20;
         ageThreshold = 8;
+        minAge = 15;
         
         % Compute the fraction of the track's age for which it was visible.
         ages = [tracks(:).age];
@@ -313,6 +337,10 @@ end
         
         % Delete lost tracks.
         tracks = tracks(~lostInds);
+
+        % Delete short tracks
+        %tracks = tracks([tracks.age] >= minAge);
+        %tracks = tracks([tracks.totalVisibleCount] >= minAge);
     end
 
 %% Create New Tracks
@@ -404,6 +432,108 @@ end
         obj.videoPlayer.step(frame);
     end
 
+function logCurrentTracks(frameIdx)
+    % Store current track data for this frame
+    frameEntry = struct('ids', [], 'bboxes', []);
+    
+    if isempty(tracks)
+        frameTrackData{frameIdx} = frameEntry;
+        return;
+    end
+
+    ids = [tracks.id];
+    bboxesNow = cat(1, tracks.bbox);
+
+    frameEntry.ids = ids;
+    frameEntry.bboxes = bboxesNow;
+    frameTrackData{frameIdx} = frameEntry;
+
+    % Update per-track history
+    for k = 1:numel(tracks)
+        tid = tracks(k).id;
+        logIdx = find([trackLog.id] == tid, 1);
+
+        if isempty(logIdx)
+            logIdx = numel(trackLog) + 1;
+            trackLog(logIdx).id = tid;
+            trackLog(logIdx).frames = [];
+            trackLog(logIdx).bboxes = [];
+            trackLog(logIdx).visible = [];
+        end
+
+        trackLog(logIdx).frames(end+1,1) = frameIdx;
+        trackLog(logIdx).bboxes(end+1,:) = tracks(k).bbox;
+        trackLog(logIdx).visible(end+1,1) = ...
+            (tracks(k).consecutiveInvisibleCount == 0);
+    end
+end
+
+    function exportValidMaskedVideo()
+    % Valid = detected in at least minValidFrames frames
+    validIds = [];
+    for i = 1:numel(trackLog)
+        visibleCount = sum(trackLog(i).visible);
+        if visibleCount >= minValidFrames
+            validIds(end+1) = trackLog(i).id; %#ok<AGROW>
+        end
+    end
+
+    fprintf('Valid track IDs: ');
+    disp(validIds);
+
+    writer = VideoWriter('valid_tracks_masked.mp4', 'MPEG-4');
+    writer.FrameRate = obj.reader.FrameRate;
+    open(writer);
+
+    for f = 1:numel(frameMasks)
+        rawMask = frameMasks{f};
+        filteredMask = false(size(rawMask));
+
+        entry = frameTrackData{f};
+
+        if ~isempty(entry.ids)
+            keep = ismember(entry.ids, validIds);
+
+            if any(keep)
+                keptBoxes = round(entry.bboxes(keep, :));
+
+                for j = 1:size(keptBoxes, 1)
+                    x = max(1, keptBoxes(j,1));
+                    y = max(1, keptBoxes(j,2));
+                    w = keptBoxes(j,3);
+                    h = keptBoxes(j,4);
+
+                    x2 = min(size(rawMask,2), x + w - 1);
+                    y2 = min(size(rawMask,1), y + h - 1);
+
+                    if x2 >= x && y2 >= y
+                        filteredMask(y:y2, x:x2) = ...
+                            filteredMask(y:y2, x:x2) | rawMask(y:y2, x:x2);
+                    end
+                end
+            end
+        end
+
+        maskRGB = uint8(repmat(filteredMask, [1 1 3])) * 255;
+
+        % optional: draw labels on kept tracks
+        if ~isempty(entry.ids)
+            keep = ismember(entry.ids, validIds);
+            if any(keep)
+                keptBoxes = round(entry.bboxes(keep, :));
+                keptLabels = cellstr(string(entry.ids(keep))');
+                maskRGB = insertObjectAnnotation(maskRGB, 'rectangle', ...
+                    keptBoxes, keptLabels);
+            end
+        end
+
+        writeVideo(writer, maskRGB);
+    end
+
+    close(writer);
+    fprintf('Saved valid_tracks_masked.mp4\n');
+end
+
 %% Summary
 % This example created a motion-based system for detecting and
 % tracking multiple moving objects. Try using a different video to see if
@@ -420,6 +550,7 @@ end
 % motion model, such as constant acceleration, or by using multiple Kalman
 % filters for every object. Also, you can incorporate other cues for
 % associating detections over time, such as size, shape, and color. 
+
 
 
 end
