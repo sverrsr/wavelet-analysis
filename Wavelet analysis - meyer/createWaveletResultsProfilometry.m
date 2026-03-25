@@ -3,66 +3,37 @@
 
 % Written by Herman Martens Meyer
 
-% Edited by Sverre Steinnes Romøren
+% Applied and edited by Sverre Steinnes Romøren
+    % Applied to DNS instead of profilometry
+        % allowedDistance = 10;
     % proximity-based instead of convection-based
 
 %%
-clearvars;clc;
+clearvars; clc;
 
 % I Read Video and Prepare Timestamp
-load("C:\Users\sverrsr\Documents\SYNC\flow-statistics\surfElev_RE2500_WEINF.mat");
+%load("D:\sverrsr\Documents\SYNC\flow-statistics\surfElev_RE2500_WEINF.mat");
 
 %%
+shadow_path = "E:\SYNC\path-trace-for-free-surface-flow\h5\WEINF\caustics_out_4p00pi.h5";
+surfElev2 = h5read(shadow_path, "/caustic_frames");
+
+
+%%
+%
 x = 1:256;
 y = 1:256;
 
 [X, Y] = meshgrid(x, y);
 
 %%
-surfElev = permute(surfElev, [3, 1, 2]);
-data1 = surfElev(:, :, 1:250); % FULL PROFILOMETRY DATASET. [x_dim, y_dim, ~]
+% FULL DATASET. 
+% The data should be on form [x_dim, y_dim, ~]
+% surfElev is not, shadows are
+%surfElev2   = permute(surfElev, [2, 3, 1]); 
+surfElev2   = surfElev2(:,:, 1:2000); % Test size
+data1       = surfElev2(:, :, :); % Cropped
 
-
-
-% %%
-% % video = data.filteredFramesGray;
-% % times = data.filteredTimeindeces;
-% % stamps = data.filteredTimestamps;
-% 
-% video = data.calibratedVideo;
-% times = data.timeIndeces;
-% stamps = data.timeStamps;
-% %% Don't ask
-% disp(stamps(38)-stamps(37)-1/30)
-% disp(stamps(212)-stamps(37)-1/30)
-% % disp(14/15-1/15)
-% % disp(299/15 - 1/15)
-% % 
-% % disp(41/45 - 1/45)
-% % disp(895/45 - 1/45)
-% 
-% %% Short snippet to get data on correct form
-% [height, width, numFrames] = size(video);
-% 
-% % height=1080;
-% % width=1920;
-% % numFrames=2241;
-% 
-% %% Preallocate a 3D matrix for the frames
-% % eta = zeros(height, width, numFrames, 'uint8'); % Use 'uint8' for grayscale images
-% % 
-% % %Populate the 3D matrix
-% % for t = 1:numFrames
-% %     eta(:, :, t) = video{t};
-% % end
-% 
-% eta = video;
-% disp('Data read and converted to correct form.');
-% 
-% %% MEAN SUBTRACTION TO REMOVE THE BLACK CEILING PANELS
-% % Convert eta to double, then subtract the mean frame.
-% mean_frame = mean(eta, 3); % 1080x1920 (double)
-% eta_meansub = double(eta) - mean_frame;
 
 %%
 % eta_meansub = data1.surfData;
@@ -73,15 +44,16 @@ numFrames = size(eta_meansub, 3);
 % Parameters for wavelet filtering
 % scales = 1:8;
 % selected_scale = 8;
-eccentricity_threshold = 0.85;
-solidity_threshold = 0.6;
-[x_dim, y_dim, ~] = size(eta_meansub);
-stamps    = zeros(1, numFrames);
+eccentricity_threshold  = 0.85; % 1 line 0 circle
+solidity_threshold      = 0.6;
+[x_dim, y_dim, ~]       = size(eta_meansub);
+stamps                  = zeros(1, numFrames);
 
 %% Loop through different W_thr
 
-selected_scale = 8;
-W_thr_list = -0.12:0.02:0;
+selected_scale  = 1; % Dette er på en måte blur
+W_thr_list = -1e-4;
+%W_thr_list = [-5e-4 -2e-4 -1e-4 -5e-5 0 5e-5 1e-4]; %-5e-4
 
 fprintf('Going though different W_thr')
 
@@ -97,6 +69,9 @@ for W_thr = W_thr_list
     detectionCount = zeros(1, numFrames);
     detectionTime  = zeros(1, numFrames);
    
+    binaryDimples = false(x_dim, y_dim, numFrames);
+    binaryAll = false(x_dim, y_dim, numFrames);
+
     for t_index = 1:numFrames
         currentTime = (t_index);
         %currentStamp = stamps(t_index);
@@ -120,6 +95,13 @@ for W_thr = W_thr_list
         region_props = regionprops(connected_components, 'Area', 'Eccentricity', 'Solidity', 'Centroid');
         validIdx = find([region_props.Eccentricity] <= eccentricity_threshold & ...
         [region_props.Solidity] > solidity_threshold);
+
+        labelImg = labelmatrix(connected_components);
+        dimpleMask = ismember(labelImg, validIdx);   % only accepted regions
+        binaryDimples(:, :, t_index) = dimpleMask;
+
+        binaryAll(:, :, t_index) = mask;
+
         %eccentric_regions = ismember(labelmatrix(connected_components), validIdx);
         %filtered_by_eccentricity = wavelet_coefficients .* eccentric_regions;
         %filtered_all_structures(:, :, t_index) = filtered_coefficients;
@@ -156,7 +138,7 @@ for W_thr = W_thr_list
                 end
                 % Predicted position: same x, y shifted by dt*baseYShift
                 predicted = tracks(j).centroids(end,:);
-                allowedDistance = 10;   % choose a fixed search radius in pixels
+                allowedDistance = 50;   % choose a fixed search radius in pixels
                 % Compute distance from detection to predicted position
                 d = norm(centroids(i,:) - predicted);
                 if d <= allowedDistance
@@ -239,7 +221,10 @@ for W_thr = W_thr_list
               filtered_coefficients filtered_by_eccentricity
     end
     
-    lifetimeThreshold = 0; % Adjust as needed (in number of frames)
+    % τmin = 0.166* 5.41 = 0,89806 - Babiker 23
+    % dt = 0.06 - time / frame
+    % frames = τmin / dt = 15 frames
+    lifetimeThreshold = 15; % Adjust as needed (in number of frames) 
     numTracks = length(tracks);
     trackInfo = struct('id', {}, 'lifetime', {}, 'coordinates', {});
     for i = 1:numTracks
@@ -264,8 +249,22 @@ for W_thr = W_thr_list
     end
     
     fname = fullfile(outDir, sprintf('profilometryTrackingResults_1-10800_Wthr%.3f_s%d_Run2.mat', W_thr, selected_scale));
-    save(fname, 'tracks', 'trackInfo', 'stamps', 'baseYShift', 'detectionTime', 'detectionCount');
+    save(fname, 'tracks', 'trackInfo', 'stamps', 'baseYShift', ...
+           'detectionTime', 'detectionCount', 'binaryDimples');
     fprintf(' W_thr=%.3f  →  saved "%s"\n', W_thr, fname)
+    
+    % Save vids
+    name1 = sprintf('binaryAll_Wthr_%g', W_thr);
+    name2 = sprintf('binaryDimples_Wthr_%g', W_thr);
+
+    mat2video(binaryAll, name1);
+    mat2video(binaryDimples, name2);
+
+    % Save vids
+    name1 = sprintf('binaryAll_Circled_%g', W_thr);
+    name2 = sprintf('binaryDimples_Circled_%g', W_thr);
+    circle_dimples(binaryAll, name1);
+    circle_dimples(binaryDimples, name2);
 
 end
 
