@@ -7,31 +7,38 @@
     % Applied to DNS instead of profilometry
         % allowedDistance = 10;
     % proximity-based instead of convection-based
+    % added caustic
 
 %%
 clearvars; clc;
 
+surface = 'caustic'; % or 'surfElev'
+
+% FULL DATASET. 
+% The data should be on form [x_dim, y_dim, ~]
+% surfElev is not, shadows are
 % I Read Video and Prepare Timestamp
-%load("D:\sverrsr\Documents\SYNC\flow-statistics\surfElev_RE2500_WEINF.mat");
+if strcmp(surface, 'surfElev')
+    load("D:\sverrsr\Documents\SYNC\flow-statistics\surfElev_RE2500_WEINF.mat");
+    surfElev2   = permute(surfElev, [2, 3, 1]);
+
+    W_thr_list = -1.5e-4;
+elseif strcmp(surface, 'caustic')
+    shadow_path = "E:\SYNC\path-trace-for-free-surface-flow\h5\WEINF\caustics_out_4p00pi.h5";
+    surfElev2 = -h5read(shadow_path, "/caustic_frames");
+
+    W_thr_list = -1.5e-4;
+end
 
 %%
-shadow_path = "E:\SYNC\path-trace-for-free-surface-flow\h5\WEINF\caustics_out_4p00pi.h5";
-surfElev2 = h5read(shadow_path, "/caustic_frames");
 
-
-%%
-%
 x = 1:256;
 y = 1:256;
 
 [X, Y] = meshgrid(x, y);
 
 %%
-% FULL DATASET. 
-% The data should be on form [x_dim, y_dim, ~]
-% surfElev is not, shadows are
-%surfElev2   = permute(surfElev, [2, 3, 1]); 
-surfElev2   = surfElev2(:,:, 1:2000); % Test size
+surfElev2   = surfElev2(:,:, 1:100); % Test size
 data1       = surfElev2(:, :, :); % Cropped
 
 
@@ -52,8 +59,8 @@ stamps                  = zeros(1, numFrames);
 %% Loop through different W_thr
 
 selected_scale  = 1; % Dette er på en måte blur
-W_thr_list = -1e-4;
-%W_thr_list = [-5e-4 -2e-4 -1e-4 -5e-5 0 5e-5 1e-4]; %-5e-4
+
+
 
 fprintf('Going though different W_thr')
 
@@ -95,6 +102,20 @@ for W_thr = W_thr_list
         region_props = regionprops(connected_components, 'Area', 'Eccentricity', 'Solidity', 'Centroid');
         validIdx = find([region_props.Eccentricity] <= eccentricity_threshold & ...
         [region_props.Solidity] > solidity_threshold);
+
+        % Section added by S
+        labelImg = labelmatrix(connected_components);
+        dimpleMask = ismember(labelImg, validIdx);
+        binaryDimples(:, :, t_index) = dimpleMask;
+        
+        validLabelImg = zeros(size(labelImg), 'uint16');
+        componentLabelFrames = zeros(x_dim, y_dim, numFrames, 'uint16');
+        for ii = 1:numel(validIdx)
+            oldLabel = validIdx(ii);
+            validLabelImg(labelImg == oldLabel) = ii;
+        end
+
+        componentLabelFrames(:, :, t_index) = validLabelImg;
 
         labelImg = labelmatrix(connected_components);
         dimpleMask = ismember(labelImg, validIdx);   % only accepted regions
@@ -138,7 +159,7 @@ for W_thr = W_thr_list
                 end
                 % Predicted position: same x, y shifted by dt*baseYShift
                 predicted = tracks(j).centroids(end,:);
-                allowedDistance = 50;   % choose a fixed search radius in pixels
+                allowedDistance = 5;   % choose a fixed search radius in pixels
                 % Compute distance from detection to predicted position
                 d = norm(centroids(i,:) - predicted);
                 if d <= allowedDistance
@@ -252,19 +273,31 @@ for W_thr = W_thr_list
     save(fname, 'tracks', 'trackInfo', 'stamps', 'baseYShift', ...
            'detectionTime', 'detectionCount', 'binaryDimples');
     fprintf(' W_thr=%.3f  →  saved "%s"\n', W_thr, fname)
-    
-    % Save vids
-    name1 = sprintf('binaryAll_Wthr_%g', W_thr);
-    name2 = sprintf('binaryDimples_Wthr_%g', W_thr);
 
-    mat2video(binaryAll, name1);
+    % Save vids
+    if strcmp(surface, 'surfElev')
+        %name1 = sprintf('binaryAll_Wthr_%g', W_thr);
+        name2 = sprintf('binaryDimples_Wthr_%g', W_thr);
+
+        %name3 = sprintf('binaryAll_Circled_%g', W_thr);
+        name4 = sprintf('binaryDimples_Circled_%g', W_thr);
+    elseif strcmp(surface, 'caustic')
+        %name1 = sprintf('caustic_binaryAll_Wthr_%g', W_thr);
+        name2 = sprintf('caustic_binaryDimples_Wthr_%g', W_thr);
+
+        %name3 = sprintf('caustic_binaryAll_Circled_%g', W_thr);
+        name4 = sprintf('caustic_binaryDimples_Circled_%g', W_thr);
+    end
+    
+    
+    % Save vids - mask
+
+    %mat2video(binaryAll, name1);
     mat2video(binaryDimples, name2);
 
-    % Save vids
-    name1 = sprintf('binaryAll_Circled_%g', W_thr);
-    name2 = sprintf('binaryDimples_Circled_%g', W_thr);
-    circle_dimples(binaryAll, name1);
-    circle_dimples(binaryDimples, name2);
+    % Save vids - circle mask
+    %circle_dimples(binaryAll, name3);
+    circle_dimples(binaryDimples, name4);
 
 end
 
